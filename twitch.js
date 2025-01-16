@@ -86,7 +86,7 @@ function checkTime() {
 		// Reset the timer
 	timerStart = performance.now();
 	} else if (elapsedTime >= 540) {
-		console.log("Timeout triggered (15 minutes without non-bot chat activity). Bot leaving...");
+		console.log("Timeout triggered (Over 15 minutes without non-bot chat activity). Bot leaving...");
 		client.say(chatBotJSON.twitchChannel, "Ah, I seem to be the only one here... I'll just see myself out then.");
 		shutdown();
 	}
@@ -160,8 +160,16 @@ function resetChatMessageCollection() {
 
 async function sendUnpromptedChatMessage(channel) {
 	const content = "There have not been any new chat messages recently, please come up with you'd like to say in Twitch Chat.";
-    const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
-    client.say(channel, response.reply);
+    	const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
+
+	// Check if Assistant has any chat messages that should be sent separately.
+	if (response.reply.includes(" ||| ")) {
+		const replyArray = response.reply.split(" ||| ");
+		sendChatMessagesWithDelay(channel, replyArray, 200);
+	} else {
+		client.say(channel, response.reply);
+	}
+	
 	thread_id = response.thread_id;
 }
 
