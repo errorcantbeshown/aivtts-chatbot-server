@@ -71,9 +71,6 @@ function checkTime() {
 	const now = performance.now();
     	const elapsedTime = (now - timerStart) / 1000; // Convert to seconds
 
-	// Keep Render Server Alive (Every 2.5 mins)
-	if (elapsedTime >= 150) { renderKeepAlive(chatBotJSON.userKey, chatBotJSON.id); }
-	
 	if (chatMessagesArray.length != 0 && elapsedTime >= 300) {
 		botChattedLast = false;
 		replyToChatMessages(chatBotJSON.twitchChannel, chatMessagesArray);
@@ -209,3 +206,6 @@ async function renderKeepAlive(userKey, botKey) {
 
 // Periodically check the time (e.g., every 10 seconds)
 setInterval(checkTime, 10000);
+
+// Keep Render Server Alive (Every 2.5 mins)
+setInterval(renderKeepAlive(chatBotJSON.userKey, chatBotJSON.id), 150000);
