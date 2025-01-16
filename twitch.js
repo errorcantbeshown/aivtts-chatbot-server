@@ -188,7 +188,7 @@ async function updateChatBotInDatabaseInfo(BASE_URL, userKey, botKey, threadID, 
     } catch (error) { console.error("Error updating Chat Bot in Database:", error.message); }
 }
 
-async function renderKeepAlive(userKey, botKey) {
+function renderKeepAlive(userKey, botKey) {
 	try {
         // Use axios to send a POST request
         const response = await axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
