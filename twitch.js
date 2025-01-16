@@ -69,22 +69,25 @@ client.on('message', (listeningChannel, tags, message, self) => {
 
 function checkTime() {
 	const now = performance.now();
-    const elapsedTime = (now - timerStart) / 1000; // Convert to seconds
+    	const elapsedTime = (now - timerStart) / 1000; // Convert to seconds
 
+	// Keep Render Server Alive (Every 2.5 mins)
+	if (elapsedTime >= 150) { renderKeepAlive(chatBotJSON.userKey, chatBotJSON.id); }
+	
 	if (chatMessagesArray.length != 0 && elapsedTime >= 300) {
 		botChattedLast = false;
 		replyToChatMessages(chatBotJSON.twitchChannel, chatMessagesArray);
-
+	
 		// Reset the timer
-        timerStart = performance.now();
+	timerStart = performance.now();
 		resetChatMessageCollection();
 	} else if (!botChattedLast && elapsedTime >= 480) {
 		console.log("Lull in chat activity (8 minutes without any chat activity). Bot sending unprompted message...");
 		sendUnpromptedChatMessage(chatBotJSON.twitchChannel);
 		botChattedLast = true;
-
+	
 		// Reset the timer
-        timerStart = performance.now();
+	timerStart = performance.now();
 	} else if (elapsedTime >= 540) {
 		console.log("Timeout triggered (15 minutes without non-bot chat activity). Bot leaving...");
 		client.say(chatBotJSON.twitchChannel, "Ah, I seem to be the only one here... I'll just see myself out then.");
@@ -186,6 +189,22 @@ async function updateChatBotInDatabaseInfo(BASE_URL, userKey, botKey, threadID, 
             }
         } catch (err) { console.error("Unable to determine if Chat Bot was updated in Database:", err.message); }
     } catch (error) { console.error("Error updating Chat Bot in Database:", error.message); }
+}
+
+async function renderKeepAlive(userKey, botKey) {
+	try {
+        // Use axios to send a POST request
+        const response = await axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
+        
+        // The response.data should be either "started" OR "failed"
+        try {
+            if (response.data === "started") {
+                console.log('Keep Alive CronJob Started.');
+            } else {
+                console.log('Failed to start Keep Alive CronJob.');
+            }
+        } catch (err) { console.error("Unable to determine if Keep Alive CronJob was started:", err.message); }
+    } catch (error) { console.error("Error starting Keep Alive CronJob:", error.message); }
 }
 
 // Periodically check the time (e.g., every 10 seconds)
