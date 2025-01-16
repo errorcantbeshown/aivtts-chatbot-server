@@ -188,10 +188,10 @@ async function updateChatBotInDatabaseInfo(BASE_URL, userKey, botKey, threadID, 
     } catch (error) { console.error("Error updating Chat Bot in Database:", error.message); }
 }
 
-function renderKeepAlive(userKey, botKey) {
+async function renderKeepAlive(userKey, botKey) {
     try {
         // Use axios to send a POST request
-        const response = axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
+        const response = await axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
         
         // The response.data should be either "started" OR "failed"
         try {
@@ -208,4 +208,4 @@ function renderKeepAlive(userKey, botKey) {
 setInterval(checkTime, 10000);
 
 // Keep Render Server Alive (Every 2.5 mins)
-setInterval(renderKeepAlive(chatBotJSON.userKey, chatBotJSON.id), 150000);
+setInterval(() => renderKeepAlive(chatBotJSON.userKey, chatBotJSON.id), 150000);
