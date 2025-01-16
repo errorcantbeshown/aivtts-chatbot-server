@@ -189,9 +189,9 @@ async function updateChatBotInDatabaseInfo(BASE_URL, userKey, botKey, threadID, 
 }
 
 function renderKeepAlive(userKey, botKey) {
-	try {
+    try {
         // Use axios to send a POST request
-        const response = await axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
+        const response = axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
         
         // The response.data should be either "started" OR "failed"
         try {
