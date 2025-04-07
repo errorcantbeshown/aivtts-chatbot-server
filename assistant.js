@@ -1,6 +1,20 @@
 import OpenAI from 'openai';
+import { storeUserMemory } from './memory';
 
-export async function getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, messageContent) {
+export async function getEmbedding(openaiAPIKey, text) {
+    const openai = new OpenAI({
+        apiKey: openaiAPIKey,
+    });
+
+    const res = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: text,
+        encoding_format: "float",
+    });
+    return res.data[0].embedding;
+}
+
+export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, messageContent) {
 
     const openai = new OpenAI({
         apiKey: openaiAPIKey,
@@ -21,35 +35,122 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, thread_i
         }
     );
 
-    let run = await openai.beta.threads.runs.createAndPoll(
-        thread_id,
-        { 
-            assistant_id: assistant_id
-        }
-    );
-
-    if (run.status === 'completed') {
-        const messages = await openai.beta.threads.messages.list(
-            run.thread_id,
-            {
-                limit: 2
+    try {
+        let run = runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id);
+        let runCompleted = false;
+        let finalReply = "";
+    
+        if (run.status === "requires_action") {
+            for (const call of run.required_action.submit_tool_outputs.tool_calls) {
+                if (call.function.name === "storeUserMemory") {
+                    const args = JSON.parse(call.function.arguments);
+                    console.log(`Storing memory for ${args.username}: ${args.memory}`);
+                    await storeUserMemory(openaiAPIKey, assistantMemoryJSON, args.username, args.memory);
+                }
             }
-        );
 
-        for (const message of messages.data) {
-            if (message.role === 'assistant') {
-                console.log("Assistant's reply is ready!");
-                return {
-                    thread_id: thread_id,
-                    reply: `${message.content[0].text.value}`,
-                };
+            // Submit tool outputs to complete the run
+            await openai.beta.threads.runs.submitToolOutputs(thread_id, run.id, {
+                tool_outputs: run.required_action.submit_tool_outputs.tool_calls.map((call) => ({
+                    tool_call_id: call.id,
+                    output: "Memory stored!",
+                })),
+            });
+
+            // Poll for run completion after tool output submission
+            run = await openai.beta.threads.runs.retrieve(thread_id, run.id);
+        }
+
+        // Check if it's now completed
+        if (run.status === "completed") {
+            const messages = await openai.beta.threads.messages.list(
+                run.thread_id,
+                {
+                    limit: 2,
+                }
+            );
+
+            for (const message of messages.data) {
+                if (message.role === "assistant") {
+                    console.log("Assistant's reply is ready!");
+                    finalReply = message.content[0].text.value;
+                    runCompleted = true;
+                    break;
+                }
             }
         }
-    } else {
-        console.log("No Assistant Reply! Run Status: " + run.status);
+
+        if (runCompleted) {
+            return {
+                thread_id: thread_id,
+                reply: finalReply,
+            };
+        } else {
+            console.log("No Assistant reply yet! Final run status: " + run.status);
+            return {
+                thread_id: thread_id,
+                reply: "",
+            };
+        }
+    } catch (err) {
+        console.error("Could NOT perform run!", err.message);
         return {
             thread_id: thread_id,
             reply: "",
         };
     }
 }
+
+async function runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id) {
+    const openai = new OpenAI({
+        apiKey: openaiAPIKey,
+    });
+
+    try {
+        const run = await openai.beta.threads.runs.createAndPoll(
+            thread_id,
+            { 
+                assistant_id: assistant_id
+            }
+        );
+        return run;
+    } catch (err) {
+        if (err.message.includes("TPM")) {
+            console.warn("TPM limit exceeded — rolling thread...");
+            const newThreadID = await rollOverThread(thread.id, assistant_id);
+            const run = await openai.beta.threads.runs.createAndPoll(
+                newThreadID,
+                { 
+                    assistant_id: assistant_id
+                }
+            );
+            return run;
+        } else {
+            throw err; // bubble up other errors
+        }
+    }
+}
+
+async function rollOverThread(openaiAPIKey, thread_id) {
+    const openai = new OpenAI({
+        apiKey: openaiAPIKey,
+    });
+
+    const messages = await openai.beta.threads.messages.list(thread_id, { limit: 20 });
+    const newThread = await openai.beta.threads.create();
+  
+    // Copy over the last ~6 messages (3 user/assistant pairs)
+    const lastMessages = messages.data
+        .filter(msg => msg.role === "user" || msg.role === "assistant")
+        .slice(0, 6)
+        .reverse();
+  
+    for (const msg of lastMessages) {
+        await openai.beta.threads.messages.create(newThread.id, {
+            role: msg.role,
+            content: msg.content.map(c => c.text.value).join("\n"),
+        });
+    }
+  
+    return newThread.id;
+}  
