@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { Client } from 'tmi.js';
 import { performance } from 'perf_hooks';
+import { getBatchRelevantMemoriesFromString } from './memory.js';
 import { getReplyFromAssistant } from './assistant.js';
 
 const chatBotDataUpdateBaseURL = process.env.CHATBOT_UPDATE_BASE_URL;
@@ -19,8 +20,9 @@ const client = new Client({
 let timerStart = performance.now();
 const openaiAPIKey = chatBotJSON.openaiAPIKey;
 const assistant_id = chatBotJSON.openaiAssistantID;
+const assistantMemoryJSON = chatBotJSON.id + ".json";
 let thread_id = chatBotJSON.openaiPreviousThreadID;
-let startMessageResponse = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, chatBotJSON.startMessageToBot);
+let startMessageResponse = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, chatBotJSON.startMessageToBot);
 let chatMessagesArray = [];
 let botChattedLast = true;
 
@@ -69,24 +71,24 @@ client.on('message', (listeningChannel, tags, message, self) => {
 
 function checkTime() {
 	const now = performance.now();
-    	const elapsedTime = (now - timerStart) / 1000; // Convert to seconds
+    const elapsedTime = (now - timerStart) / 1000; // Convert to seconds
 
 	if (chatMessagesArray.length != 0 && elapsedTime >= 300) {
 		botChattedLast = false;
 		replyToChatMessages(chatBotJSON.twitchChannel, chatMessagesArray);
-	
+
 		// Reset the timer
-	timerStart = performance.now();
+        timerStart = performance.now();
 		resetChatMessageCollection();
 	} else if (!botChattedLast && elapsedTime >= 480) {
 		console.log("Lull in chat activity (8 minutes without any chat activity). Bot sending unprompted message...");
 		sendUnpromptedChatMessage(chatBotJSON.twitchChannel);
 		botChattedLast = true;
-	
+
 		// Reset the timer
-	timerStart = performance.now();
-	} else if (elapsedTime >= 540) {
-		console.log("Timeout triggered (Over 15 minutes without non-bot chat activity). Bot leaving...");
+        timerStart = performance.now();
+	} else if (elapsedTime >= 420) {
+		console.log("Timeout triggered (15 minutes without non-bot chat activity). Bot leaving...");
 		client.say(chatBotJSON.twitchChannel, "Ah, I seem to be the only one here... I'll just see myself out then.");
 		shutdown();
 	}
@@ -135,8 +137,13 @@ async function replyToChatMessages(replyChannel, collectedChatMessages) {
 	// Decided whether to actually reply to chat messages by weighted dice roll or if someone has mentioned the bot/assistant.
 	const reply = (replyDecisions[(Math.floor(Math.random() * replyDecisions.length))] == "true" || chatMessagesString.toLowerCase().includes(chatBotJSON.botName.toLowerCase()));
 	if (reply) {
-		const content = "Here are the most recent messages from Twitch Chat, please respond to this in less than 500 characters: " + chatMessagesString;
-		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
+		const { chatBatch, relevantMemories } = await getBatchRelevantMemoriesFromString(openaiAPIKey, assistantMemoryJSON, chatMessagesString, 2);
+		
+		const memoryContext = relevantMemories.length ? "And here are some relevant past memories of users those users for context:\n" + relevantMemories.map(m => `- ${m.username} on [${m.date}]: ${m.text}`).join("\n") : "";
+
+		const content = `Here are the most recent messages from Twitch Chat:\n${chatMessagesString}\n\n${memoryContext}\n\nPlease respond to the recent messages from Twitch Chat in less than 500 characters.`;
+
+		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, content);
 
 		// Check if Assistant has any chat messages that should be sent separately.
 		if (response.reply.includes(" ||| ")) {
@@ -149,7 +156,7 @@ async function replyToChatMessages(replyChannel, collectedChatMessages) {
 		thread_id = response.thread_id;
 	} else {
 		const content = "Here are the most recent messages from Twitch Chat, don't come up with a response to them — your reply won't be sent. This is just to keep you informed on what's being said: " + chatMessagesString;
-		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
+		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, content);
     	thread_id = response.thread_id;
 	}
 }
@@ -160,7 +167,7 @@ function resetChatMessageCollection() {
 
 async function sendUnpromptedChatMessage(channel) {
 	const content = "There have not been any new chat messages recently, please come up with you'd like to say in Twitch Chat.";
-    	const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
+    const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, content);
 
 	// Check if Assistant has any chat messages that should be sent separately.
 	if (response.reply.includes(" ||| ")) {
@@ -169,7 +176,7 @@ async function sendUnpromptedChatMessage(channel) {
 	} else {
 		client.say(channel, response.reply);
 	}
-	
+
 	thread_id = response.thread_id;
 }
 
@@ -197,7 +204,7 @@ async function updateChatBotInDatabaseInfo(BASE_URL, userKey, botKey, threadID, 
 }
 
 async function renderKeepAlive(userKey, botKey) {
-    try {
+	try {
         // Use axios to send a POST request
         const response = await axios.post(process.env.KEEP_ALIVE_CRONJOB_URL + "?id=" + userKey + "&botKey=" + botKey);
         
