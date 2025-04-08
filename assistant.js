@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { storeUserMemory } from './memory';
+import { storeUserMemory } from './memory.js';
 
 export async function getEmbedding(openaiAPIKey, text) {
     const openai = new OpenAI({
