@@ -7,7 +7,7 @@ export async function getEmbedding(openaiAPIKey, text) {
     });
 
     const res = await openai.embeddings.create({
-        model: "text-embedding-3-small",
+        model: "text-embedding-3-large",
         input: text,
         encoding_format: "float",
     });
@@ -47,7 +47,8 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
         
         // Poll loop for run completion
         while (["queued", "in_progress", "requires_action"].includes(run.status)) {
-            console.log("Current run status:", run.status);
+            // For Debuggging
+            //console.log("Current run status:", run.status);
 
             if (run.status === "requires_action") {
                 const toolCalls = run.required_action?.submit_tool_outputs?.tool_calls || [];
@@ -74,7 +75,7 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
             run = await openai.beta.threads.runs.retrieve(thread_id, run.id);
         }
 
-        console.log("Final run status:", run.status);
+        console.log("Run status:", run.status);
 
         // Check if it's now completed
         if (run.status === "completed") {
@@ -101,7 +102,7 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
                 reply: finalReply,
             };
         } else {
-            console.log("No Assistant reply! Final run status: " + run.status);
+            console.log("No Assistant reply! Run status: " + run.status);
             return {
                 thread_id: thread_id,
                 reply: "",
