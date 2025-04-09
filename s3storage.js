@@ -1,5 +1,4 @@
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { Readable } from 'stream';
 
 // Helper to stream S3 data to string
 const streamToString = async (stream) => {
