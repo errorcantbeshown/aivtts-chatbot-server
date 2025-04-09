@@ -55,6 +55,14 @@ function cosineSimilarity(vecA, vecB) {
     return dotProduct / (magnitudeA * magnitudeB);
 }
 
+function extractKeywords(text) {
+    return text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, "") // remove punctuation
+        .split(/\s+/)
+        .filter(word => word.length > 3); // ignore very short words
+}
+
 // Create "yyyy-MM-ddTkk:mm:ssZ" timestamp
 function getCustomTimestamp() {
     const now = new Date();
@@ -94,8 +102,25 @@ export async function getBatchRelevantMemoriesFromString(openaiAPIKey, jsonFileN
             .slice(0, maxPerUser);
 
         // Save the top one (most relevant) to represent the user
-        if (topMatches.length > 0 && !userMemoryMap[username]) {
-        userMemoryMap[username] = topMatches[0];
+        if (topMatches.length > 0) {
+            // Accept the top similarity match
+            userMemoryMap[username] = topMatches[0];
+        } else {
+            // 🔍 Fallback: fuzzy keyword matching
+            const msgKeywords = extractKeywords(message);
+            const fuzzyMatch = user.memories.find(mem => {
+                const memKeywords = extractKeywords(mem.text);
+                return msgKeywords.some(kw => memKeywords.includes(kw));
+            });
+
+            if (fuzzyMatch && !userMemoryMap[username]) {
+                console.log(`[FUZZY] Using keyword fallback for ${username}:`, fuzzyMatch.text);
+                userMemoryMap[username] = {
+                ...fuzzyMatch,
+                username,
+                similarity: 0.0, // indicate it wasn't a similarity match
+                };
+            }
         }
     }
 
