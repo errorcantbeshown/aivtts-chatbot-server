@@ -40,11 +40,19 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
         let run = runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id);
         let runCompleted = false;
         let finalReply = "";
+
+        if (!run || !run.id) {
+            throw new Error("Failed to create run or run ID missing.");
+        }
         
         // Poll loop for run completion
         while (["queued", "in_progress", "requires_action"].includes(run.status)) {
+            console.log("Current run status:", run.status);
+
             if (run.status === "requires_action") {
-                for (const call of run.required_action.submit_tool_outputs.tool_calls) {
+                const toolCalls = run.required_action?.submit_tool_outputs?.tool_calls || [];
+
+                for (const call of toolCalls) {
                     if (call.function.name === "storeUserMemory") {
                         const args = JSON.parse(call.function.arguments);
                         console.log(`Storing memory for ${args.username}: ${args.memory}`);
@@ -54,7 +62,7 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
 
                 // Submit tool outputs
                 await openai.beta.threads.runs.submitToolOutputs(thread_id, run.id, {
-                    tool_outputs: run.required_action.submit_tool_outputs.tool_calls.map((call) => ({
+                    tool_outputs: toolCalls.map((call) => ({
                         tool_call_id: call.id,
                         output: "Memory stored!",
                     })),
@@ -64,8 +72,9 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
             // Wait and re-fetch run status
             await new Promise((resolve) => setTimeout(resolve, 1000));
             run = await openai.beta.threads.runs.retrieve(thread_id, run.id);
-            console.log("Polling run status:", run.status);
         }
+
+        console.log("Final run status:", run.status);
 
         // Check if it's now completed
         if (run.status === "completed") {
@@ -79,7 +88,7 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
             for (const message of messages.data) {
                 if (message.role === "assistant") {
                     console.log("Assistant's reply is ready!");
-                    finalReply = message.content[0].text.value;
+                    finalReply = message.content?.[0]?.text?.value || "";
                     runCompleted = true;
                     break;
                 }
