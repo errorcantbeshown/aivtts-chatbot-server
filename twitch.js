@@ -139,7 +139,7 @@ async function replyToChatMessages(replyChannel, collectedChatMessages) {
 	if (reply) {
 		const { chatBatch, relevantMemories } = await getBatchRelevantMemoriesFromString(openaiAPIKey, assistantMemoryJSON, chatMessagesString, 2);
 		
-		const memoryContext = relevantMemories.length ? "And here are some relevant past memories of users those users for context:\n" + relevantMemories.map(m => `- ${m.username} on [${m.date}]: ${m.text}`).join("\n") : "";
+		const memoryContext = relevantMemories.length ? "Here are some relevant past memories of users in chat:\n" + relevantMemories.map(m => `- ${m.username} on [${m.date}]: ${m.text}` + (m.similarity === 0.0 ? " (fuzzy match)" : "")).join("\n") : "";
 
 		const content = `Here are the most recent messages from Twitch Chat:\n${chatMessagesString}\n\n${memoryContext}\n\nPlease respond to the recent messages from Twitch Chat in less than 500 characters.`;
 
@@ -191,8 +191,8 @@ async function updateChatBotInDatabaseInfo(BASE_URL, userKey, botKey, threadID, 
         // Use axios to send a GET request
         const response = await axios.get(BASE_URL + "?id=" + userKey + "&botKey=" + botKey + "&threadID=" + threadID + "&status=" + status);
         
-        // The response.data should be either "updated" OR "failed"
-        console.log("Main App Response Data:", response.data);
+        // For Debuggin: The response.data should be either "updated" OR "failed"
+        //console.log("Main App Response Data:", response.data);
         try {
             if (response.data === "updated") {
                 console.log('Updated Chat Bot in Database.');
