@@ -27,7 +27,8 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
         console.log("New Thread ID: " + thread_id);
     } else { console.log("Current Thread ID: " + thread_id); }
 
-    const message = await openai.beta.threads.messages.create(
+    // Send user message
+    await openai.beta.threads.messages.create(
         thread_id,
         {
             role: "user",
@@ -39,26 +40,31 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
         let run = runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id);
         let runCompleted = false;
         let finalReply = "";
-    
-        if (run.status === "requires_action") {
-            for (const call of run.required_action.submit_tool_outputs.tool_calls) {
-                if (call.function.name === "storeUserMemory") {
-                    const args = JSON.parse(call.function.arguments);
-                    console.log(`Storing memory for ${args.username}: ${args.memory}`);
-                    await storeUserMemory(openaiAPIKey, assistantMemoryJSON, args.username, args.memory);
+        
+        // Poll loop for run completion
+        while (["queued", "in_progress", "requires_action"].includes(run.status)) {
+            if (run.status === "requires_action") {
+                for (const call of run.required_action.submit_tool_outputs.tool_calls) {
+                    if (call.function.name === "storeUserMemory") {
+                        const args = JSON.parse(call.function.arguments);
+                        console.log(`Storing memory for ${args.username}: ${args.memory}`);
+                        await storeUserMemory(openaiAPIKey, assistantMemoryJSON, args.username, args.memory);
+                    }
                 }
+
+                // Submit tool outputs
+                await openai.beta.threads.runs.submitToolOutputs(thread_id, run.id, {
+                    tool_outputs: run.required_action.submit_tool_outputs.tool_calls.map((call) => ({
+                        tool_call_id: call.id,
+                        output: "Memory stored!",
+                    })),
+                });
             }
 
-            // Submit tool outputs to complete the run
-            await openai.beta.threads.runs.submitToolOutputs(thread_id, run.id, {
-                tool_outputs: run.required_action.submit_tool_outputs.tool_calls.map((call) => ({
-                    tool_call_id: call.id,
-                    output: "Memory stored!",
-                })),
-            });
-
-            // Poll for run completion after tool output submission
+            // Wait and re-fetch run status
+            await new Promise((resolve) => setTimeout(resolve, 1000));
             run = await openai.beta.threads.runs.retrieve(thread_id, run.id);
+            console.log("Polling run status:", run.status);
         }
 
         // Check if it's now completed
@@ -86,7 +92,7 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
                 reply: finalReply,
             };
         } else {
-            console.log("No Assistant reply yet! Final run status: " + run.status);
+            console.log("No Assistant reply! Final run status: " + run.status);
             return {
                 thread_id: thread_id,
                 reply: "",
@@ -107,7 +113,7 @@ async function runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id) {
     });
 
     try {
-        const run = await openai.beta.threads.runs.createAndPoll(
+        let run = await openai.beta.threads.runs.create(
             thread_id,
             { 
                 assistant_id: assistant_id
@@ -118,7 +124,7 @@ async function runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id) {
         if (err.message.includes("TPM")) {
             console.warn("TPM limit exceeded — rolling thread...");
             const newThreadID = await rollOverThread(thread.id, assistant_id);
-            const run = await openai.beta.threads.runs.createAndPoll(
+            let run = await openai.beta.threads.runs.create(
                 newThreadID,
                 { 
                     assistant_id: assistant_id
@@ -153,4 +159,4 @@ async function rollOverThread(openaiAPIKey, thread_id) {
     }
   
     return newThread.id;
-}  
+}
