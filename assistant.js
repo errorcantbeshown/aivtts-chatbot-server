@@ -37,12 +37,12 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
     );
 
     try {
-        let run = runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id);
+        let run = await runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id);
         let runCompleted = false;
         let finalReply = "";
 
         if (!run || !run.id) {
-            throw new Error("Failed to create run or run ID missing.");
+            throw new Error("Run creation failed or returned invalid data.");
         }
         
         // Poll loop for run completion
