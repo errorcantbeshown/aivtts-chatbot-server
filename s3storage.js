@@ -31,7 +31,7 @@ export async function uploadJson(jsonFileName, data) {
     };
 
     await s3.send(new PutObjectCommand(params));
-    console.log('Uploaded JSON to S3');
+    console.log('Uploaded JSON to S3.');
 }
 
 // Download JSON from S3
@@ -45,7 +45,9 @@ export async function downloadJson(jsonFileName) {
         const result = await s3.send(new GetObjectCommand(params));
         const body = await streamToString(result.Body);
         const jsonData = JSON.parse(body);
-        console.log('Downloaded JSON:', jsonData);
+        console.log('Downloaded JSON from S3.');
+        // For Debugging
+        //console.log('Downloaded JSON:', jsonData);
         return jsonData;
     } catch (error) {
         if ( error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404 ) {
