@@ -2,6 +2,21 @@ import axios from 'axios';
 import { spawn } from 'child_process';
 
 export default (req, res) => {
+
+    // Enable CORS
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*'); // You can restrict this to a specific domain if needed
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+        'Access-Control-Allow-Headers',
+        'X-CSRF-Token, X-Requested-With, Accept, Authorization, Content-Type, Origin'
+    );
+
+    // Handle preflight OPTIONS request
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    
     const userKey = req.query.id;
     const botKey = req.query.botKey;
 
