@@ -1,13 +1,24 @@
+import Airtable from 'airtable';
 import { getEmbedding } from './assistant.js';
-import { uploadJson, downloadJson } from "./s3storage.js";
 
-export async function loadMemory(jsonFileName) {
-    try {
-        const data = await downloadJson(jsonFileName);
-        return data;
-    } catch {
-        return { users: [] };
-    }
+// Airtable setup
+const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base('app4nfN3wFP48Mb8G');
+
+// Fetch user memories from Airtable
+async function fetchUserMemories(username) {
+    const records = await base('User Memories')
+        .select({
+            filterByFormula: `{Username} = "${username}"`,
+            maxRecords: 100, // tweak as needed
+        })
+        .all();
+  
+    return records.map(rec => ({
+        id: rec.id,
+        text: rec.fields.Text,
+        embedding: JSON.parse(rec.fields.Embedding),
+        date: rec.fields.Date,
+    }));
 }
 
 export function parseChatBatch(batchString) {
@@ -21,30 +32,21 @@ export function parseChatBatch(batchString) {
     }).filter(Boolean);
 }
 
-export async function saveMemory(jsonFileName, data) {
-    await uploadJson(jsonFileName, data);
-}
-
 // Add or update memory
-export async function storeUserMemory(openaiAPIKey, jsonFileName, username, memoryText) {
-    const memory = await loadMemory(jsonFileName);
+export async function storeUserMemory(openaiAPIKey, username, memoryText) {
+    // Generate embedding
     const embedding = await getEmbedding(openaiAPIKey, memoryText);
-    const timestamp = getCustomTimestamp();
-
-    const newEntry = {
-        text: memoryText,
-        embedding,
-        date: timestamp,
-    };
-
-    const user = memory.users.find((u) => u.username === username);
-    if (user) {
-        user.memories.push(newEntry);
-    } else {
-        memory.users.push({ username, memories: [newEntry] });
-    }
-
-    await saveMemory(jsonFileName, memory);
+  
+    // Save to Airtable
+    await base('User Memories').create({
+      Username: username,
+      Text: memoryText,
+      Embedding: JSON.stringify(embedding), // store as a JSON string
+      Date: getCustomTimestamp(),
+      EmbeddingModel: "text-embedding-3-large", // optional, but future-proof
+    });
+  
+    console.log(`Stored new memory for ${username} in Airtable!`);
 }
 
 // Simple cosine similarity
@@ -80,35 +82,35 @@ function getCustomTimestamp() {
     return `${yyyy}-${MM}-${dd}T${kk}:${mm}:${ss}Z`;
 }
 
-export async function getBatchRelevantMemoriesFromString(openaiAPIKey, jsonFileName, batchString, maxPerUser = 2) {
+export async function getBatchRelevantMemoriesFromString(openaiAPIKey, batchString, maxPerUser = 2) {
     const chatBatch = parseChatBatch(batchString);
-    const memory = await loadMemory(jsonFileName);
     const userMemoryMap = {};
+    const SIMILARITY_THRESHOLD = 0.75;
 
     for (const { username, message } of chatBatch) {
-        const user = memory.users.find((u) => u.username === username);
-        if (!user || user.memories.length === 0) continue;
+        const userMemories = await fetchUserMemories(username);
+        if (userMemories.length === 0) continue;
 
         const messageEmbedding = await getEmbedding(openaiAPIKey, message);
-        const scored = user.memories.map((entry) => ({
+
+        const scored = userMemories.map((entry) => ({
             ...entry,
             username,
             similarity: cosineSimilarity(messageEmbedding, entry.embedding),
         }));
 
-        // Sort and get top N for this user
         const topMatches = scored
+            .filter((m) => m.similarity >= SIMILARITY_THRESHOLD)
             .sort((a, b) => b.similarity - a.similarity)
             .slice(0, maxPerUser);
 
-        // Save the top one (most relevant) to represent the user
         if (topMatches.length > 0) {
             // Accept the top similarity match
             userMemoryMap[username] = topMatches[0];
         } else {
-            // 🔍 Fallback: fuzzy keyword matching
+            // Fallback: fuzzy keyword matching
             const msgKeywords = extractKeywords(message);
-            const fuzzyMatch = user.memories.find(mem => {
+            const fuzzyMatch = userMemories.find(mem => {
                 const memKeywords = extractKeywords(mem.text);
                 return msgKeywords.some(kw => memKeywords.includes(kw));
             });
@@ -116,17 +118,17 @@ export async function getBatchRelevantMemoriesFromString(openaiAPIKey, jsonFileN
             if (fuzzyMatch && !userMemoryMap[username]) {
                 console.log(`[FUZZY] Using keyword fallback for ${username}:`, fuzzyMatch.text);
                 userMemoryMap[username] = {
-                ...fuzzyMatch,
-                username,
-                similarity: 0.0, // indicate it wasn't a similarity match
+                    ...fuzzyMatch,
+                    username,
+                    similarity: 0.0, // indicate it wasn't a similarity match
                 };
             }
         }
     }
-
+    
     // Flatten the final list of unique user memories
     const relevantMemories = Object.values(userMemoryMap);
-
+  
     return {
         chatBatch,
         relevantMemories,
@@ -135,14 +137,14 @@ export async function getBatchRelevantMemoriesFromString(openaiAPIKey, jsonFileN
 
 // Retrieve top N similar memories
 export async function getRelevantMemories(openaiAPIKey, username, query, topN = 3) {
-    const memory = await loadMemory(jsonFileName);
-    const user = memory.users.find((u) => u.username === username);
-    if (!user || !user.memories.length) return [];
+    const userMemories = await fetchUserMemories(username);
+    if (userMemories.length === 0) return [];
 
     const queryEmbedding = await getEmbedding(openaiAPIKey, query);
-    const scored = user.memories.map((mem) => ({
-        text: mem.text,
-        score: cosineSimilarity(queryEmbedding, mem.embedding),
+
+    const scored = userMemories.map((entry) => ({
+        text: entry.text,
+        score: cosineSimilarity(queryEmbedding, entry.embedding),
     }));
 
     return scored.sort((a, b) => b.score - a.score).slice(0, topN).map((m) => m.text);
