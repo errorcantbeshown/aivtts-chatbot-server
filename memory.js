@@ -13,12 +13,29 @@ async function fetchUserMemories(username) {
         })
         .all();
   
-    return records.map(rec => ({
-        id: rec.id,
-        text: rec.fields.Text,
-        embedding: JSON.parse(rec.fields.Embedding),
-        date: rec.fields.Date,
-    }));
+    return records.map(rec => {
+        let parsedEmbedding;
+        try {
+            parsedEmbedding = JSON.parse(rec.fields.Embedding);
+        } catch (err) {
+            console.warn(`[WARN] Failed to parse embedding for memory ID ${rec.id}`);
+            return null; // Skip broken record
+        }
+  
+        // Make sure it's a proper array of numbers
+        if (!Array.isArray(parsedEmbedding) || parsedEmbedding.length < 100) { // 3,072 floats expected
+            console.warn(`[WARN] Invalid embedding format for memory ID ${rec.id}`);
+            return null;
+        }
+  
+        return {
+            id: rec.id,
+            text: rec.fields.Text,
+            embedding: parsedEmbedding,
+            date: rec.fields.Date,
+        };
+    })
+    .filter(Boolean); // Filter out any null results
 }
 
 export function parseChatBatch(batchString) {
