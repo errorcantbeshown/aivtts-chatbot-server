@@ -20,9 +20,9 @@ const client = new Client({
 let timerStart = performance.now();
 const openaiAPIKey = chatBotJSON.openaiAPIKey;
 const assistant_id = chatBotJSON.openaiAssistantID;
-const assistantMemoryJSON = chatBotJSON.twitchChannel + "-" + chatBotJSON.id + ".json";
+//const assistantMemoryJSON = chatBotJSON.twitchChannel + "-" + chatBotJSON.id + ".json"; // TODO Change For Different Memory Types (Lore, Events, etc.)
 let thread_id = chatBotJSON.openaiPreviousThreadID;
-let startMessageResponse = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, chatBotJSON.startMessageToBot);
+let startMessageResponse = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, chatBotJSON.startMessageToBot);
 let chatMessagesArray = [];
 let botChattedLast = true;
 
@@ -137,13 +137,13 @@ async function replyToChatMessages(replyChannel, collectedChatMessages) {
 	// Decided whether to actually reply to chat messages by weighted dice roll or if someone has mentioned the bot/assistant.
 	const reply = (replyDecisions[(Math.floor(Math.random() * replyDecisions.length))] == "true" || chatMessagesString.toLowerCase().includes(chatBotJSON.botName.toLowerCase()));
 	if (reply) {
-		const { chatBatch, relevantMemories } = await getBatchRelevantMemoriesFromString(openaiAPIKey, assistantMemoryJSON, chatMessagesString, 2);
+		const { chatBatch, relevantMemories } = await getBatchRelevantMemoriesFromString(openaiAPIKey, chatMessagesString, 2);
 		
 		const memoryContext = relevantMemories.length ? "Here are some relevant past memories of users in chat:\n" + relevantMemories.map(m => `- ${m.username} on [${m.date}]: ${m.text}` + (m.similarity === 0.0 ? " (fuzzy match)" : "")).join("\n") : "";
 
 		const content = `Here are the most recent messages from Twitch Chat:\n${chatMessagesString}\n\n${memoryContext}\n\nPlease respond to the recent messages from Twitch Chat in less than 500 characters.`;
 
-		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, content);
+		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
 
 		// Check if Assistant has any chat messages that should be sent separately.
 		if (response.reply.includes(" ||| ")) {
@@ -156,7 +156,7 @@ async function replyToChatMessages(replyChannel, collectedChatMessages) {
 		thread_id = response.thread_id;
 	} else {
 		const content = "Here are the most recent messages from Twitch Chat, don't come up with a response to them — your reply won't be sent. This is just to keep you informed on what's being said: " + chatMessagesString;
-		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, content);
+		const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
     	thread_id = response.thread_id;
 	}
 }
@@ -167,7 +167,7 @@ function resetChatMessageCollection() {
 
 async function sendUnpromptedChatMessage(channel) {
 	const content = "There have not been any new chat messages recently, please come up with you'd like to say in Twitch Chat.";
-    const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, content);
+    const response = await getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, content);
 
 	// Check if Assistant has any chat messages that should be sent separately.
 	if (response.reply.includes(" ||| ")) {
