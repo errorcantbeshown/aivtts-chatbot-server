@@ -14,7 +14,7 @@ export async function getEmbedding(openaiAPIKey, text) {
     return res.data[0].embedding;
 }
 
-export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistantMemoryJSON, thread_id, messageContent) {
+export async function getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, messageContent) {
 
     const openai = new OpenAI({
         apiKey: openaiAPIKey,
@@ -57,7 +57,7 @@ export async function getReplyFromAssistant(openaiAPIKey, assistant_id, assistan
                     if (call.function.name === "storeUserMemory") {
                         const args = JSON.parse(call.function.arguments);
                         console.log(`Storing memory for ${args.username}: ${args.memory}`);
-                        await storeUserMemory(openaiAPIKey, assistantMemoryJSON, args.username, args.memory);
+                        await storeUserMemory(openaiAPIKey, args.username, args.memory);
                     }
                 }
 
