@@ -1,172 +1,227 @@
 import OpenAI from 'openai';
 import { storeUserMemory } from './memory.js';
+import crypto from 'crypto';
 
+/**
+ * Embeddings: unchanged, still uses text-embedding-3-large.
+ */
 export async function getEmbedding(openaiAPIKey, text) {
     const openai = new OpenAI({
         apiKey: openaiAPIKey,
     });
 
     const res = await openai.embeddings.create({
-        model: "text-embedding-3-large",
+        model: 'text-embedding-3-large',
         input: text,
-        encoding_format: "float",
+        encoding_format: 'float',
     });
     return res.data[0].embedding;
 }
 
-export async function getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, messageContent) {
+/**
+ * ---- Conversation state (persistent threads) ----
+ *
+ * This simple in-memory store maps thread_id -> array of { role, content }.
+ * Swap this out for Redis/DB if you need true persistence.
+ */
+const threadStore = new Map(); // Map<string, Array<{role: "user"|"assistant"|"system", content: string}>>
 
-    const openai = new OpenAI({
-        apiKey: openaiAPIKey,
-    });
+function createNewThreadId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
-    if (!thread_id) {
-        console.log("No Thread ID specified, creating new Thread...");
-        const thread = await openai.beta.threads.create();
-        thread_id = thread.id;
-        console.log("New Thread ID: " + thread_id);
-    } else { console.log("Current Thread ID: " + thread_id); }
+function getOrCreateThread(thread_id) {
+    let id = thread_id;
+    if (!id) {
+        id = createNewThreadId();
+        console.log('No Thread ID specified, creating new Thread...', id);
+    } else {
+        console.log('Current Thread ID:', id);
+    }
 
-    // Send user message
-    await openai.beta.threads.messages.create(
-        thread_id,
-        {
-            role: "user",
-            content: messageContent
-        }
-    );
+    if (!threadStore.has(id)) {
+        threadStore.set(id, []);
+    }
+    return { id, messages: threadStore.get(id) };
+}
+
+/**
+ * ---- Tools definition (function calling) ----
+ *
+ * This mirrors your original Assistant tool JSON exactly.
+ *
+ * {
+ *   "name": "storeUserMemory",
+ *   "description": "Store a memory about a specific Twitch user",
+ *   "strict": true,
+ *   "parameters": { ... }
+ * }
+ */
+const TOOLS = [
+    {
+        type: 'function',
+        name: 'storeUserMemory',
+        description: 'Store a memory about a specific Twitch user',
+        strict: true,
+        parameters: {
+            type: 'object',
+            properties: {
+                username: {
+                    type: 'string',
+                    description: 'The Twitch username of the viewer',
+                },
+                memory: {
+                    type: 'string',
+                    description: 'The memory to store about the viewer',
+                },
+            },
+            additionalProperties: false,
+            required: ['username', 'memory'],
+        },
+    },
+];
+
+/**
+ * Main helper: generate a reply using the Responses API + tools.
+ *
+ * Signature:
+ *   getReplyFromAssistant({
+ *     openaiAPIKey,
+ *     model,          // e.g. "gpt-4o"
+ *     thread_id,      // optional, for persistent conversation
+ *     messageContent, // user message (string)
+ *     systemPrompt,   // optional system-level instructions
+ *     username,       // default username, used if tool omits it
+ *   })
+ *
+ * Returns:
+ *   { thread_id, reply }
+ */
+export async function getReplyFromAssistant({
+    openaiAPIKey,
+    model = 'gpt-4o',
+    thread_id,
+    messageContent,
+    systemPrompt = process.env.DEFAULT_SYSTEM_PROMPT || 'You are a helpful assistant.',
+    username = null,
+}) {
+    const openai = new OpenAI({ apiKey: openaiAPIKey });
+
+    const { id: effectiveThreadId, messages } = getOrCreateThread(thread_id);
+
+    // Append the new user message to our own conversation history
+    messages.push({ role: 'user', content: messageContent });
+
+    // Build the base conversation for the model
+    const inputMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+    ];
 
     try {
-        let run = await runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id);
-        let runCompleted = false;
-        let finalReply = "";
+        // 1) First call: let the model either answer directly or emit function calls
+        let response = await openai.responses.create({
+            model,
+            input: inputMessages,
+            tools: TOOLS,
+            // tool_choice: "auto" by default
+        });
 
-        if (!run || !run.id) {
-            throw new Error("Run creation failed or returned invalid data.");
+        // Base payload for next step: prior dialog + whatever the model just produced
+        let conversationPayload = [...inputMessages];
+        if (Array.isArray(response.output)) {
+            conversationPayload = conversationPayload.concat(response.output);
         }
-        
-        // Poll loop for run completion
-        while (["queued", "in_progress", "requires_action"].includes(run.status)) {
-            // For Debuggging
-            //console.log("Current run status:", run.status);
 
-            if (run.status === "requires_action") {
-                const toolCalls = run.required_action?.submit_tool_outputs?.tool_calls || [];
+        // Find any function calls (Responses API pattern: type === "function_call") 
+        const toolCalls = (response.output || []).filter(
+            (item) => item.type === 'function_call' && item.name === 'storeUserMemory'
+        );
 
-                for (const call of toolCalls) {
-                    if (call.function.name === "storeUserMemory") {
-                        const args = JSON.parse(call.function.arguments);
-                        console.log(`Storing memory for ${args.username}: ${args.memory}`);
-                        await storeUserMemory(openaiAPIKey, args.username, args.memory);
-                    }
+        if (toolCalls.length > 0) {
+            for (const call of toolCalls) {
+                const argStr = call.arguments || '{}';
+
+                let args = {};
+                try {
+                    args = JSON.parse(argStr);
+                } catch (e) {
+                    console.error('Failed to parse storeUserMemory args:', e, argStr);
+                    continue;
                 }
 
-                // Submit tool outputs
-                await openai.beta.threads.runs.submitToolOutputs(thread_id, run.id, {
-                    tool_outputs: toolCalls.map((call) => ({
-                        tool_call_id: call.id,
-                        output: "Memory stored!",
-                    })),
+                const targetUsername = args.username || username;
+                const memory = args.memory;
+
+                if (!targetUsername || !memory) {
+                    console.warn(
+                        'storeUserMemory called without username or memory:',
+                        args
+                    );
+                    continue;
+                }
+
+                // Execute your actual JS function
+                try {
+                    await storeUserMemory(openaiAPIKey, targetUsername, memory);
+                } catch (memErr) {
+                    console.error('Error running storeUserMemory:', memErr);
+                }
+
+                // Attach function output back into the conversation per function-calling docs:
+                //   { type: "function_call_output", call_id, output } 
+                const callId = call.call_id || `storeUserMemory-${Date.now()}`;
+
+                conversationPayload.push({
+                    type: 'function_call_output',
+                    call_id: callId,
+                    output: 'Memory stored!',
                 });
             }
 
-            // Wait and re-fetch run status
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            run = await openai.beta.threads.runs.retrieve(thread_id, run.id);
-        }
+            // 2) Second call: after tools have run, request final user-facing answer
+            const finalResponse = await openai.responses.create({
+                model,
+                input: conversationPayload,
+                tools: TOOLS,
+            });
 
-        console.log("Run status:", run.status);
+            const replyText = finalResponse.output_text || '';
 
-        // Check if it's now completed
-        if (run.status === "completed") {
-            const messages = await openai.beta.threads.messages.list(
-                run.thread_id,
-                {
-                    limit: 2,
-                }
-            );
+            // Persist assistant reply in our thread history
+            messages.push({ role: 'assistant', content: replyText });
 
-            for (const message of messages.data) {
-                if (message.role === "assistant") {
-                    console.log("Assistant's reply is ready!");
-                    finalReply = message.content?.[0]?.text?.value || "";
-                    runCompleted = true;
-                    break;
-                }
-            }
-        }
-
-        if (runCompleted) {
             return {
-                thread_id: thread_id,
-                reply: finalReply,
-            };
-        } else {
-            console.log("No Assistant reply! Run status: " + run.status);
-            return {
-                thread_id: thread_id,
-                reply: "",
+                thread_id: effectiveThreadId,
+                reply: replyText,
             };
         }
-    } catch (err) {
-        console.error("Could NOT perform run!", err.message);
+
+        // No tool calls were made; just use the first response as the reply.
+        const replyText = response.output_text || '';
+
+        messages.push({ role: 'assistant', content: replyText });
+
         return {
-            thread_id: thread_id,
-            reply: "",
+            thread_id: effectiveThreadId,
+            reply: replyText,
+        };
+    } catch (err) {
+        console.error('Error in getReplyFromAssistant with tools:', err?.message || err);
+        return {
+            thread_id: effectiveThreadId,
+            reply: '',
         };
     }
 }
 
-async function runWithFailOverAndRetry(openaiAPIKey, thread_id, assistant_id) {
-    const openai = new OpenAI({
-        apiKey: openaiAPIKey,
-    });
-
-    try {
-        let run = await openai.beta.threads.runs.create(
-            thread_id,
-            { 
-                assistant_id: assistant_id
-            }
-        );
-        return run;
-    } catch (err) {
-        if (err.message.includes("TPM")) {
-            console.warn("TPM limit exceeded — rolling thread...");
-            const newThreadID = await rollOverThread(thread.id, assistant_id);
-            let run = await openai.beta.threads.runs.create(
-                newThreadID,
-                { 
-                    assistant_id: assistant_id
-                }
-            );
-            return run;
-        } else {
-            throw err; // bubble up other errors
-        }
-    }
-}
-
-async function rollOverThread(openaiAPIKey, thread_id) {
-    const openai = new OpenAI({
-        apiKey: openaiAPIKey,
-    });
-
-    const messages = await openai.beta.threads.messages.list(thread_id, { limit: 20 });
-    const newThread = await openai.beta.threads.create();
-  
-    // Copy over the last ~6 messages (3 user/assistant pairs)
-    const lastMessages = messages.data
-        .filter(msg => msg.role === "user" || msg.role === "assistant")
-        .slice(0, 6)
-        .reverse();
-  
-    for (const msg of lastMessages) {
-        await openai.beta.threads.messages.create(newThread.id, {
-            role: msg.role,
-            content: msg.content.map(c => c.text.value).join("\n"),
-        });
-    }
-  
-    return newThread.id;
+// old-style: getReplyFromAssistant(openaiAPIKey, assistant_id, thread_id, messageContent)
+export async function getReplyFromAssistantLegacy(openaiAPIKey, _assistant_id, agentSystemPrompt, thread_id, messageContent) {
+  return getReplyFromAssistant({
+    openaiAPIKey,
+    model: 'gpt-4o',
+    thread_id,
+    messageContent,
+  });
 }
