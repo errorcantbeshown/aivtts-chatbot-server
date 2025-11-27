@@ -107,6 +107,7 @@ export async function getReplyFromAssistant({
     username = null,
 }) {
     const openai = new OpenAI({ apiKey: openaiAPIKey });
+    console.log("OpenAI module loaded from:", require.resolve('openai'));
 
     const { id: effectiveThreadId, messages } = getOrCreateThread(thread_id);
 
